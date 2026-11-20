@@ -28,7 +28,8 @@ machine status history, secured with JWT authentication and role-based access co
    npm run start:dev
    ```
    API base URL: `http://localhost:3000/api/v1`
-6. Import the Postman collection and run **Login as Admin** first.
+6. In Postman, import `Smart_Factory_API.postman_collection.json` (in the project root)
+   and run **1. Auth → Login as Admin** first.
 
 A default Admin account is created on first run from `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env`.
 
