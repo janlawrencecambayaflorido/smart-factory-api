@@ -6,6 +6,8 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ProductionLinesModule } from './production-lines/production-lines.module';
+import { MachinesModule } from './machines/machines.module';
+import { ProductsModule } from './products/products.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -39,6 +41,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     AuthModule,
     UsersModule,
     ProductionLinesModule,
+    MachinesModule,
+    ProductsModule,
   ],
   providers: [
     // Order matters: 1) who are you? (JWT)  2) are you allowed? (role)
