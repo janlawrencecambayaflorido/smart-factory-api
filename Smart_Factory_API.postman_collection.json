@@ -938,13 +938,13 @@
             "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/production-lines/{{productionLineId}}",
+              "raw": "{{baseUrl}}/production-lines/{{tempLineId}}",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "production-lines",
-                "{{productionLineId}}"
+                "{{tempLineId}}"
               ]
             },
             "auth": {
@@ -957,19 +957,31 @@
                 }
               ]
             },
-            "description": "Deletes the production line created by #3 (the one in {{productionLineId}}). Returns 204; sending #2 afterwards returns 404. A line that still has machines cannot be deleted (409)."
+            "description": "The Pre-request script creates a temporary production line first and this request deletes it, so your main demo line ({{productionLineId}}) is kept. Returns 204. A line that still has machines cannot be deleted (409)."
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.sendRequest({",
+                  "  url: pm.variables.get('baseUrl') + '/production-lines',",
+                  "  method: 'POST',",
+                  "  header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.variables.get('adminToken') },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ lineName: 'Temp Line ' + Date.now(), location: 'Temporary', status: 'Inactive' }) },",
+                  "}, (err, res) => {",
+                  "  if (!err && res.code === 201) pm.collectionVariables.set('tempLineId', res.json().productionLineId);",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status 204', () => pm.response.to.have.status(204));",
-                  "if (pm.response.code === 204) {",
-                  "  // The line is gone: forget its ID so later requests create a fresh line when they need one",
-                  "  pm.collectionVariables.set('productionLineId', '');",
-                  "}"
+                  "pm.test('Status 204', () => pm.response.to.have.status(204));"
                 ]
               }
             }
