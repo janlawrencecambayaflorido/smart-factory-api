@@ -8,6 +8,8 @@ import { UsersModule } from './users/users.module';
 import { ProductionLinesModule } from './production-lines/production-lines.module';
 import { MachinesModule } from './machines/machines.module';
 import { ProductsModule } from './products/products.module';
+import { ProductionRecordsModule } from './production-records/production-records.module';
+import { MachineLogsModule } from './machine-logs/machine-logs.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -43,6 +45,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     ProductionLinesModule,
     MachinesModule,
     ProductsModule,
+    ProductionRecordsModule,
+    MachineLogsModule,
   ],
   providers: [
     // Order matters: 1) who are you? (JWT)  2) are you allowed? (role)
