@@ -2,7 +2,8 @@
   "info": {
     "name": "Smart Factory API",
     "description": "ITEC 116 Final Project - Automated Smart Factory and Production Line Tracking System.\n\nRun \"1. Auth > Login as Admin\" first. Logins and create requests save tokens and IDs into collection variables automatically. The default Admin login matches ADMIN_EMAIL / ADMIN_PASSWORD in .env.example; change the adminEmail / adminPassword variables if yours differ.",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "7d0c3a52-6c1e-4b8e-9f4a-2f5e1a9b6c11"
   },
   "auth": {
     "type": "bearer",
@@ -14,6 +15,102 @@
       }
     ]
   },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "(function () {",
+          "  const MAX_AGE_MS = 50 * 60 * 1000;",
+          "  const auth = pm.request.auth;",
+          "  if (auth && auth.type === 'noauth') return;",
+          "  let raw = '{{adminToken}}';",
+          "  try {",
+          "    if (auth && auth.type === 'bearer') raw = String(auth.parameters().get('token') || raw);",
+          "  } catch (e) {}",
+          "  const match = raw.match(/(admin|supervisor|operator)Token/);",
+          "  if (!match) return;",
+          "  const role = match[1];",
+          "  const base = pm.variables.get('baseUrl');",
+          "",
+          "  const isFresh = (r) => {",
+          "    const token = pm.collectionVariables.get(r + 'Token');",
+          "    const savedAt = Number(pm.collectionVariables.get(r + 'TokenSavedAt') || 0);",
+          "    return Boolean(token) && Date.now() - savedAt < MAX_AGE_MS;",
+          "  };",
+          "",
+          "  const login = (r, done) => pm.sendRequest({",
+          "    url: base + '/auth/login',",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify({ email: pm.variables.get(r + 'Email'), password: pm.variables.get(r + 'Password') }) },",
+          "  }, (err, res) => {",
+          "    const ok = !err && res.code === 200;",
+          "    if (ok) {",
+          "      pm.collectionVariables.set(r + 'Token', res.json().accessToken);",
+          "      pm.collectionVariables.set(r + 'TokenSavedAt', String(Date.now()));",
+          "      console.log('Auto-login: refreshed ' + r + 'Token');",
+          "    }",
+          "    done(ok);",
+          "  });",
+          "",
+          "  const createAccount = (r, done) => pm.sendRequest({",
+          "    url: base + '/users',",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') },",
+          "    body: { mode: 'raw', raw: JSON.stringify({",
+          "      fullName: r === 'operator' ? 'Juan Dela Cruz' : 'Maria Santos',",
+          "      email: pm.variables.get(r + 'Email'),",
+          "      password: pm.variables.get(r + 'Password'),",
+          "      role: r === 'operator' ? 'Operator' : 'Supervisor',",
+          "    }) },",
+          "  }, () => done());",
+          "",
+          "  // \"Delete production record\" also creates a temporary record as the Operator",
+          "  const roles = [role];",
+          "  if (pm.info.requestName === 'Delete production record') roles.push('operator');",
+          "",
+          "  const ensureOne = (r, next) => {",
+          "    if (r === 'admin' || isFresh(r)) return next();",
+          "    login(r, (ok) => {",
+          "      if (ok) return next();",
+          "      createAccount(r, () => login(r, (ok2) => {",
+          "        if (!ok2) console.warn('Auto-login as ' + r + ' failed. Check the ' + r + 'Email / ' + r + 'Password variables.');",
+          "        next();",
+          "      }));",
+          "    });",
+          "  };",
+          "  const ensureRole = () => ensureOne(roles[0], () => (roles[1] ? ensureOne(roles[1], () => {}) : null));",
+          "",
+          "  if (isFresh('admin')) return ensureRole();",
+          "  login('admin', (ok) => {",
+          "    if (!ok) return console.warn('Auto-login as admin failed. Is the server running, and do adminEmail / adminPassword match your .env?');",
+          "    ensureRole();",
+          "  });",
+          "})();"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "(function () {",
+          "  if (pm.response.code !== 401) return;",
+          "  const auth = pm.request.auth;",
+          "  let raw = '{{adminToken}}';",
+          "  try {",
+          "    if (auth && auth.type === 'bearer') raw = String(auth.parameters().get('token') || raw);",
+          "  } catch (e) {}",
+          "  const match = raw.match(/(admin|supervisor|operator)Token/);",
+          "  if (match) pm.collectionVariables.set(match[1] + 'TokenSavedAt', '0');",
+          "})();"
+        ]
+      }
+    }
+  ],
   "item": [
     {
       "name": "1. Auth",
@@ -62,6 +159,7 @@
                   "const json = pm.response.json();",
                   "if (json.accessToken) {",
                   "  pm.collectionVariables.set('adminToken', json.accessToken);",
+                  "  pm.collectionVariables.set('adminTokenSavedAt', String(Date.now()));",
                   "  console.log('Saved adminToken');",
                   "}"
                 ]
@@ -101,9 +199,28 @@
                 }
               }
             },
-            "description": "Works after \"2. Users > Create Supervisor\"."
+            "description": "Run \"Login as Admin\" first. If the Supervisor account does not exist yet, the Pre-request script creates it."
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const adminToken = pm.collectionVariables.get('adminToken');",
+                  "if (adminToken) {",
+                  "  pm.sendRequest({",
+                  "    url: pm.variables.get('baseUrl') + '/users',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ fullName: 'Maria Santos', email: pm.variables.get('supervisorEmail'), password: pm.variables.get('supervisorPassword'), role: 'Supervisor' }) },",
+                  "  }, (err, res) => {",
+                  "    if (!err && res.code === 201) console.log('Created the Supervisor account first');",
+                  "  });",
+                  "}"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -113,6 +230,7 @@
                   "const json = pm.response.json();",
                   "if (json.accessToken) {",
                   "  pm.collectionVariables.set('supervisorToken', json.accessToken);",
+                  "  pm.collectionVariables.set('supervisorTokenSavedAt', String(Date.now()));",
                   "  console.log('Saved supervisorToken');",
                   "}"
                 ]
@@ -152,9 +270,28 @@
                 }
               }
             },
-            "description": "Works after \"2. Users > Create Operator\"."
+            "description": "Run \"Login as Admin\" first. If the Operator account does not exist yet, the Pre-request script creates it."
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const adminToken = pm.collectionVariables.get('adminToken');",
+                  "if (adminToken) {",
+                  "  pm.sendRequest({",
+                  "    url: pm.variables.get('baseUrl') + '/users',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adminToken },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ fullName: 'Juan Dela Cruz', email: pm.variables.get('operatorEmail'), password: pm.variables.get('operatorPassword'), role: 'Operator' }) },",
+                  "  }, (err, res) => {",
+                  "    if (!err && res.code === 201) console.log('Created the Operator account first');",
+                  "  });",
+                  "}"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -164,6 +301,7 @@
                   "const json = pm.response.json();",
                   "if (json.accessToken) {",
                   "  pm.collectionVariables.set('operatorToken', json.accessToken);",
+                  "  pm.collectionVariables.set('operatorTokenSavedAt', String(Date.now()));",
                   "  console.log('Saved operatorToken');",
                   "}"
                 ]
@@ -243,6 +381,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "setTimeout(() => {",
                   "pm.sendRequest({",
                   "  url: pm.variables.get('baseUrl') + '/auth/login',",
                   "  method: 'POST',",
@@ -251,9 +390,11 @@
                   "}, (err, res) => {",
                   "  if (!err && res.code === 200) {",
                   "    pm.collectionVariables.set('logoutToken', res.json().accessToken);",
+                  "    pm.collectionVariables.set('logoutTokenSavedAt', String(Date.now()));",
                   "    console.log('Logged in and saved logoutToken');",
                   "  }",
-                  "});"
+                  "});",
+                  "}, 1100);"
                 ]
               }
             },
@@ -335,6 +476,7 @@
                   "}, (err, res) => {",
                   "  if (!err && res.code === 200) {",
                   "    pm.collectionVariables.set('supervisorToken', res.json().accessToken);",
+                  "    pm.collectionVariables.set('supervisorTokenSavedAt', String(Date.now()));",
                   "    console.log('Logged in and saved supervisorToken');",
                   "  }",
                   "});"
@@ -399,6 +541,7 @@
                   "}, (err, res) => {",
                   "  if (!err && res.code === 200) {",
                   "    pm.collectionVariables.set('operatorToken', res.json().accessToken);",
+                  "    pm.collectionVariables.set('operatorTokenSavedAt', String(Date.now()));",
                   "    console.log('Logged in and saved operatorToken');",
                   "  }",
                   "});"
@@ -487,7 +630,7 @@
                 }
               }
             },
-            "description": "Admin only. Saves {{productionLineId}}."
+            "description": "Admin only. Returns 201 and saves {{productionLineId}}. Sending it again returns 409 (line names are unique); the test then uses the existing line's ID."
           },
           "event": [
             {
@@ -495,10 +638,23 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Status 201 or 409', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));",
                   "if (pm.response.code === 201) {",
                   "  pm.collectionVariables.set('productionLineId', pm.response.json().productionLineId);",
                   "  console.log('Saved productionLineId =', pm.response.json().productionLineId);",
+                  "}",
+                  "if (pm.response.code === 409) {",
+                  "  const wanted = JSON.parse(pm.request.body.raw)['lineName'];",
+                  "  pm.sendRequest({",
+                  "    url: pm.variables.get('baseUrl') + '/production-lines?limit=100',",
+                  "    header: { Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') },",
+                  "  }, (err, res) => {",
+                  "    const found = !err && res.code === 200 && res.json().find((row) => row.lineName === wanted);",
+                  "    if (found) {",
+                  "      pm.collectionVariables.set('productionLineId', String(found.productionLineId));",
+                  "      console.log('Already exists, using productionLineId =', found.productionLineId);",
+                  "    }",
+                  "  });",
                   "}"
                 ]
               }
@@ -738,61 +894,6 @@
           ]
         },
         {
-          "name": "#6 Delete production line",
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/production-lines/{{tempLineId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "production-lines",
-                "{{tempLineId}}"
-              ]
-            },
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{adminToken}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "description": "The Pre-request script creates a temporary line first, so your main demo line is not deleted."
-          },
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.sendRequest({",
-                  "  url: pm.variables.get('baseUrl') + '/production-lines',",
-                  "  method: 'POST',",
-                  "  header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.variables.get('adminToken') },",
-                  "  body: { mode: 'raw', raw: JSON.stringify({ lineName: 'Temp Line ' + Date.now(), location: 'Temporary' }) },",
-                  "}, (err, res) => {",
-                  "  if (!err && res.code === 201) pm.collectionVariables.set('tempLineId', res.json().productionLineId);",
-                  "});"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status 204', () => pm.response.to.have.status(204));"
-                ]
-              }
-            }
-          ]
-        },
-        {
           "name": "#7 Get machines of a production line",
           "request": {
             "method": "GET",
@@ -826,6 +927,49 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "#6 Delete production line",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/production-lines/{{productionLineId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "production-lines",
+                "{{productionLineId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Deletes the production line created by #3 (the one in {{productionLineId}}). Returns 204; sending #2 afterwards returns 404. A line that still has machines cannot be deleted (409)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 204', () => pm.response.to.have.status(204));",
+                  "if (pm.response.code === 204) {",
+                  "  // The line is gone: forget its ID so later requests create a fresh line when they need one",
+                  "  pm.collectionVariables.set('productionLineId', '');",
+                  "}"
                 ]
               }
             }
@@ -874,9 +1018,47 @@
                 }
               }
             },
-            "description": "Admin only. Saves {{machineId}}."
+            "description": "Admin only. Saves {{machineId}}. If no production line exists yet, the Pre-request script creates one first."
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureLine(() => {",
+                  "  ",
+                  "  ",
+                  "  ",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -1014,6 +1196,44 @@
           },
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ",
+                  "  ",
+                  "  ",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1067,6 +1287,44 @@
           },
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ",
+                  "  ",
+                  "  ",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1110,13 +1368,42 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.sendRequest({",
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureLine(() => {",
+                  "  ",
+                  "  pm.sendRequest({",
                   "  url: pm.variables.get('baseUrl') + '/machines',",
                   "  method: 'POST',",
                   "  header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.variables.get('adminToken') },",
-                  "  body: { mode: 'raw', raw: JSON.stringify({ machineName: 'Temp Machine ' + Date.now(), machineType: 'Temp', productionLineId: Number(pm.variables.get('productionLineId')) }) },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ machineName: 'Temp Machine ' + Date.now(), machineType: 'Temp', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }) },",
                   "}, (err, res) => {",
                   "  if (!err && res.code === 201) pm.collectionVariables.set('tempMachineId', res.json().machineId);",
+                  "});",
+                  "  ",
                   "});"
                 ]
               }
@@ -1160,6 +1447,44 @@
             "description": "Business rule: a production line with machines cannot be deleted."
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ",
+                  "  ",
+                  "  ",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -1214,7 +1539,7 @@
                 }
               }
             },
-            "description": "Admin only. Saves {{productId}}."
+            "description": "Admin only. Returns 201 and saves {{productId}}. Sending it again returns 409 (product names are unique); the test then uses the existing product's ID."
           },
           "event": [
             {
@@ -1222,10 +1547,23 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Status 201 or 409', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));",
                   "if (pm.response.code === 201) {",
                   "  pm.collectionVariables.set('productId', pm.response.json().productId);",
                   "  console.log('Saved productId =', pm.response.json().productId);",
+                  "}",
+                  "if (pm.response.code === 409) {",
+                  "  const wanted = JSON.parse(pm.request.body.raw)['productName'];",
+                  "  pm.sendRequest({",
+                  "    url: pm.variables.get('baseUrl') + '/products?limit=100',",
+                  "    header: { Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') },",
+                  "  }, (err, res) => {",
+                  "    const found = !err && res.code === 200 && res.json().find((row) => row.productName === wanted);",
+                  "    if (found) {",
+                  "      pm.collectionVariables.set('productId', String(found.productId));",
+                  "      console.log('Already exists, using productId =', found.productId);",
+                  "    }",
+                  "  });",
                   "}"
                 ]
               }
@@ -1467,9 +1805,47 @@
                 }
               }
             },
-            "description": "Operator or Supervisor only. Uses {{operatorToken}}. Saves {{recordId}}."
+            "description": "Operator or Supervisor only. Uses {{operatorToken}}. Saves {{recordId}}. If the machine or product does not exist yet, the Pre-request script creates it first."
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ensureProduct(() => {",
+                  "  ",
+                  "  });",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -1527,6 +1903,44 @@
           },
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ensureProduct(() => {",
+                  "  ",
+                  "  });",
+                  "});"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -1577,6 +1991,44 @@
             }
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ensureProduct(() => {",
+                  "  ",
+                  "  });",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -1749,13 +2201,42 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.sendRequest({",
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ensureProduct(() => {",
+                  "  pm.sendRequest({",
                   "  url: pm.variables.get('baseUrl') + '/production-records',",
                   "  method: 'POST',",
                   "  header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.variables.get('operatorToken') },",
-                  "  body: { mode: 'raw', raw: JSON.stringify({ productId: Number(pm.variables.get('productId')), machineId: Number(pm.variables.get('machineId')), quantityProduced: 1, defectiveQuantity: 0, dateTime: new Date().toISOString(), remarks: 'Temporary' }) },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ productId: Number(pm.collectionVariables.get('productId')), machineId: Number(pm.collectionVariables.get('machineId')), quantityProduced: 1, defectiveQuantity: 0, dateTime: new Date().toISOString(), remarks: 'Temporary' }) },",
                   "}, (err, res) => {",
                   "  if (!err && res.code === 201) pm.collectionVariables.set('tempRecordId', res.json().recordId);",
+                  "});",
+                  "  });",
                   "});"
                 ]
               }
@@ -1817,6 +2298,44 @@
             "description": "Operator or Supervisor only. Also updates the machine's current status (one transaction). Saves {{logId}}."
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const base = pm.variables.get('baseUrl');",
+                  "const adminHeader = () => ({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('adminToken') });",
+                  "function ensure(path, idVar, idField, makeBody, nameField, done) {",
+                  "  const id = pm.collectionVariables.get(idVar);",
+                  "  const create = () => pm.sendRequest({ url: base + path, method: 'POST', header: adminHeader(), body: { mode: 'raw', raw: JSON.stringify(makeBody()) } }, (err, res) => {",
+                  "    if (!err && res.code === 201) {",
+                  "      pm.collectionVariables.set(idVar, String(res.json()[idField]));",
+                  "      console.log('Created missing ' + idVar + ' = ' + res.json()[idField]);",
+                  "      return done();",
+                  "    }",
+                  "    if (!err && res.code === 409 && nameField) {",
+                  "      return pm.sendRequest({ url: base + path + '?limit=100', header: adminHeader() }, (err2, res2) => {",
+                  "        const found = !err2 && res2.code === 200 && res2.json().find((row) => row[nameField] === makeBody()[nameField]);",
+                  "        if (found) pm.collectionVariables.set(idVar, String(found[idField]));",
+                  "        done();",
+                  "      });",
+                  "    }",
+                  "    done();",
+                  "  });",
+                  "  if (!id) return create();",
+                  "  pm.sendRequest({ url: base + path + '/' + id, header: adminHeader() }, (err, res) => (!err && res.code === 200 ? done() : create()));",
+                  "}",
+                  "const ensureLine = (done) => ensure('/production-lines', 'productionLineId', 'productionLineId', () => ({ lineName: 'Line A - Bottling', location: 'Building 1, Floor 1', status: 'Active' }), 'lineName', done);",
+                  "const ensureMachine = (done) => ensureLine(() => ensure('/machines', 'machineId', 'machineId', () => ({ machineName: 'Filling Machine 01', machineType: 'Filler', status: 'Active', productionLineId: Number(pm.collectionVariables.get('productionLineId')) }), null, done));",
+                  "const ensureProduct = (done) => ensure('/products', 'productId', 'productId', () => ({ productName: 'Mineral Water 500ml', productType: 'Bottled Water', unitOfMeasure: 'Piece', targetQuantity: 1000, description: '500ml PET bottle' }), 'productName', done);",
+                  "ensureMachine(() => {",
+                  "  ",
+                  "  ",
+                  "  ",
+                  "});"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -2020,6 +2539,21 @@
     },
     {
       "key": "logoutToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminTokenSavedAt",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "supervisorTokenSavedAt",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "operatorTokenSavedAt",
       "value": "",
       "type": "string"
     },
